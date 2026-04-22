@@ -6,7 +6,7 @@ typedef struct{
     uint32_t duty;    
     gpio_num_t gpio_num;
     ledc_channel_t channel;    
-    
+    int percentage; // porcentaje de intensidad (0-100)
 } led_t;
 
 typedef struct{
@@ -23,3 +23,6 @@ void config_led_rgb(led_rgb_t *led_rgb);
 void set_led_rgb_given_struct(led_rgb_t *led_rgb);
 void set_led_rgb_percentage_given_values(led_rgb_t *led_rgb, int percentage_red, int percentage_green, int percentage_blue);     
 void set_led_rgb_given_values(led_rgb_t *led_rgb, uint32_t duty_red, uint32_t duty_green, uint32_t duty_blue);
+
+// NUEVA: incrementa en 10% el color indicado (0=rojo, 1=verde, 2=azul)
+void increment_led_color(led_rgb_t *led_rgb, int color);

@@ -13,7 +13,6 @@ void config_led_rgb(led_rgb_t *led_rgb)
     };
     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
-    // Prepare and then apply the LEDC PWM channel configuration for red LED
     ledc_channel_config_t ledc_channel_red = {
         .speed_mode     = led_rgb->speed_mode,
         .channel        = led_rgb->led_red.channel,
@@ -85,8 +84,52 @@ void set_led_rgb_given_values(led_rgb_t *led_rgb, uint32_t duty_red, uint32_t du
 
 void set_led_rgb_percentage_given_values(led_rgb_t *led_rgb, int percentage_red, int percentage_green, int percentage_blue)
 {
-    uint32_t duty_red = pow(2, led_rgb->duty_resolution) * percentage_red / 100;
+   /* uint32_t duty_red = pow(2, led_rgb->duty_resolution) * percentage_red / 100;
     uint32_t duty_green = pow(2, led_rgb->duty_resolution) * percentage_green / 100;
     uint32_t duty_blue = pow(2, led_rgb->duty_resolution) * percentage_blue / 100;
     set_led_rgb_given_values(led_rgb, duty_red, duty_green, duty_blue);
+
+*/
+    // Guarda los porcentajes actuales en la estructura      <-- CAMBIO
+    led_rgb->led_red.percentage   = percentage_red;
+    led_rgb->led_green.percentage = percentage_green;
+    led_rgb->led_blue.percentage  = percentage_blue;
+ 
+    uint32_t duty_red   = (uint32_t)(pow(2, led_rgb->duty_resolution) * percentage_red   / 100.0);
+    uint32_t duty_green = (uint32_t)(pow(2, led_rgb->duty_resolution) * percentage_green / 100.0);
+    uint32_t duty_blue  = (uint32_t)(pow(2, led_rgb->duty_resolution) * percentage_blue  / 100.0);
+ 
+    set_led_rgb_given_values(led_rgb, duty_red, duty_green, duty_blue);
 }
+ 
+// NUEVA FUNCION ---------------------------------------------------------------
+// Incrementa en 10% la intensidad del color indicado.
+// color: 0 = rojo, 1 = verde, 2 = azul
+// Al llegar a 100% vuelve a 0% (ciclo completo).
+void increment_led_color(led_rgb_t *led_rgb, int color)
+{
+    int *pct = NULL;
+ 
+    if      (color == 0) pct = &led_rgb->led_red.percentage;
+    else if (color == 1) pct = &led_rgb->led_green.percentage;
+    else if (color == 2) pct = &led_rgb->led_blue.percentage;
+    else return;  // color inválido, no hace nada
+ 
+    // Sube 10%; si supera 100 reinicia a 0
+    *pct += 10;
+    if (*pct > 100) *pct = 0;
+ 
+    // Aplica los tres canales con el porcentaje actualizado
+    set_led_rgb_percentage_given_values(
+        led_rgb,
+        led_rgb->led_red.percentage,
+        led_rgb->led_green.percentage,
+        led_rgb->led_blue.percentage
+    );
+ 
+    printf("R:%3d%%  G:%3d%%  B:%3d%%\n",
+        led_rgb->led_red.percentage,
+        led_rgb->led_green.percentage,
+        led_rgb->led_blue.percentage);
+}
+ 
