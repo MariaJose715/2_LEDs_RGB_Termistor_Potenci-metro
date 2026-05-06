@@ -1,6 +1,10 @@
 #include "library_led_c.h"
 #include <math.h>
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Configura timer + 3 canales PWM para un LED RGB
+// ─────────────────────────────────────────────────────────────────────────────
 void config_led_rgb(led_rgb_t *led_rgb)
 {
     // Prepare and then apply the LEDC PWM timer configuration
@@ -47,6 +51,10 @@ void config_led_rgb(led_rgb_t *led_rgb)
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel_blue));
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Aplica los duty guardados en la estructura
+// ─────────────────────────────────────────────────────────────────────────────
 void set_led_rgb_given_struct(led_rgb_t *led_rgb)
 {
     // Set duty for red LED
@@ -62,6 +70,11 @@ void set_led_rgb_given_struct(led_rgb_t *led_rgb)
     // Update duty to apply the new value for blue LED
     ESP_ERROR_CHECK(ledc_update_duty(led_rgb->speed_mode, led_rgb->led_blue.channel));
 }
+
+ 
+// ─────────────────────────────────────────────────────────────────────────────
+// Aplica duty crudo (0–8191) a los tres canales
+// ─────────────────────────────────────────────────────────────────────────────
 
 void set_led_rgb_given_values(led_rgb_t *led_rgb, uint32_t duty_red, uint32_t duty_green, uint32_t duty_blue)
 {
@@ -82,6 +95,9 @@ void set_led_rgb_given_values(led_rgb_t *led_rgb, uint32_t duty_red, uint32_t du
     ESP_ERROR_CHECK(ledc_update_duty(led_rgb->speed_mode, led_rgb->led_blue.channel));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Aplica porcentajes (0-100) a los tres canales y los guarda en la estructura
+// ─────────────────────────────────────────────────────────────────────────────
 void set_led_rgb_percentage_given_values(led_rgb_t *led_rgb, int percentage_red, int percentage_green, int percentage_blue)
 {
    /* uint32_t duty_red = pow(2, led_rgb->duty_resolution) * percentage_red / 100;
@@ -102,6 +118,9 @@ void set_led_rgb_percentage_given_values(led_rgb_t *led_rgb, int percentage_red,
     set_led_rgb_given_values(led_rgb, duty_red, duty_green, duty_blue);
 }
  
+// ─────────────────────────────────────────────────────────────────────────────
+// Sube 10% el color indicado (0=R, 1=G, 2=B). Al llegar a 100 vuelve a 0.
+// ─────────────────────────────────────────────────────────────────────────────
 // NUEVA FUNCION ---------------------------------------------------------------
 // Incrementa en 10% la intensidad del color indicado.
 // color: 0 = rojo, 1 = verde, 2 = azul
@@ -133,3 +152,18 @@ void increment_led_color(led_rgb_t *led_rgb, int color)
         led_rgb->led_blue.percentage);
 }
  
+// ─────────────────────────────────────────────────────────────────────────────
+// NUEVA: Apaga el LED completamente
+// ─────────────────────────────────────────────────────────────────────────────
+void led_rgb_off(led_rgb_t *led_rgb)
+{
+    set_led_rgb_percentage_given_values(led_rgb, 0, 0, 0);
+}
+ 
+// ─────────────────────────────────────────────────────────────────────────────
+// NUEVA: Enciende el LED con los porcentajes indicados (alias más legible)
+// ─────────────────────────────────────────────────────────────────────────────
+void led_rgb_set_color(led_rgb_t *led_rgb, int r_pct, int g_pct, int b_pct)
+{
+    set_led_rgb_percentage_given_values(led_rgb, r_pct, g_pct, b_pct);
+}

@@ -26,3 +26,9 @@ void set_led_rgb_given_values(led_rgb_t *led_rgb, uint32_t duty_red, uint32_t du
 
 // NUEVA: incrementa en 10% el color indicado (0=rojo, 1=verde, 2=azul)
 void increment_led_color(led_rgb_t *led_rgb, int color);
+
+// ── NUEVAS ────────────────────────────────────────────────────────────────────
+// Apaga el LED completamente
+void led_rgb_off(led_rgb_t *led_rgb);
+// Enciende el LED con los porcentajes R, G, B indicados
+void led_rgb_set_color(led_rgb_t *led_rgb, int r_pct, int g_pct, int b_pct);
