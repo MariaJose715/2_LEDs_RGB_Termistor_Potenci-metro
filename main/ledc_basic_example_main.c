@@ -47,12 +47,12 @@ static const char *TAG = "LED_RGB";
 #define BUTTON_GPIO      2               // mismo botón que antes
  
 // ── Termistor NTCLE100E3101JB0A ───────────────────────────────────────────────
-// R0 = 100 Ω a T0 = 25°C, B = 4250 K
-// Divisor de voltaje: 3.3V → R_fija(100Ω) → pin ADC → termistor → GND
-#define THERMISTOR_R0    100.0f
-#define THERMISTOR_B     4250.0f
+// R0 = 1000 Ω a T0 = 25°C, B = 3800 K
+// Divisor de voltaje: 3.3V → R_fija(1000Ω) → pin ADC → termistor → GND
+#define THERMISTOR_R0    10000.0f
+#define THERMISTOR_B     4100.0f
 #define THERMISTOR_T0    298.15f   // 25°C en Kelvin
-#define THERMISTOR_RFIJA 100.0f    // resistencia fija del divisor (100 Ω)
+#define THERMISTOR_RFIJA 1000.0f   // resistencia fija del divisor (1000 Ω)
 #define ADC_MAX          4095.0f   // resolución 12 bits
  
 // ── Estados del LED 2 ─────────────────────────────────────────────────────────
@@ -74,8 +74,8 @@ static float adc_to_temperature(int raw)
  
     // Resistencia del termistor en el divisor: Rt = Rfija * Vadc / (3.3 - Vadc)
     if (v_adc >= 3.3f) v_adc = 3.29f; // evitar división por cero
-    float r_thermistor = THERMISTOR_RFIJA * v_adc / (3.3f - v_adc);
- 
+    //float r_thermistor = THERMISTOR_RFIJA * v_adc / (3.3f - v_adc);
+    float r_thermistor = THERMISTOR_RFIJA * (3.3f - v_adc) / v_adc;
     // Ecuación Beta
     float inv_T = (1.0f / THERMISTOR_T0) + (1.0f / THERMISTOR_B) * logf(r_thermistor / THERMISTOR_R0);
     float temp_k = 1.0f / inv_T;
