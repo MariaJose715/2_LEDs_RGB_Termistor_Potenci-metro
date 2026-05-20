@@ -12,6 +12,26 @@
  *             Estado 3 (SHOW)  : muestra los 3 colores guardados. Botón reinicia desde estado 0.
  */
  
+ /*
+ * Proyecto: LED RGB dual + UART
+ *   LED 1 → controlado por termistor NTC con rangos configurables por UART
+ *   LED 2 → máquina de estados con 1 botón + 1 potenciómetro
+ *
+ * Comandos UART (escribir en monitor serie + Enter):
+ *   Grupo 1 - Límites de temperatura por color (LED1):
+ *     LIM_MI_R_<val>   mínimo de temperatura para rojo   (ej: LIM_MI_R_5)
+ *     LIM_MA_R_<val>   máximo de temperatura para rojo   (ej: LIM_MA_R_20)
+ *     LIM_MI_B_<val>   mínimo de temperatura para azul   (ej: LIM_MI_B_10)
+ *     LIM_MA_B_<val>   máximo de temperatura para azul   (ej: LIM_MA_B_30)
+ *     LIM_MI_G_<val>   mínimo de temperatura para verde  (ej: LIM_MI_G_15)
+ *     LIM_MA_G_<val>   máximo de temperatura para verde  (ej: LIM_MA_G_40)
+ *   Grupo 2 - Intensidad fija por color (ambos LEDs):
+ *     INT_R_<val>      intensidad rojo   0-100  (ej: INT_R_80)
+ *     INT_B_<val>      intensidad azul   0-100  (ej: INT_B_50)
+ *     INT_G_<val>      intensidad verde  0-100  (ej: INT_G_30)
+ *   Grupo 3 - Lectura:
+ *     READ             imprime todos los valores actuales
+ */
 #include <stdio.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
@@ -23,20 +43,41 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "driver/uart.h"
+#include <string.h>
 #include "library_led_c.h"
 
 
+
+
 static const char *TAG = "LED_RGB";
+
+// ── Variables globales configurables por UART ─────────────────────────────────
+// Límites de temperatura por color (LED1)
+static int lim_min_red   = 5,  lim_max_red   = 15;
+static int lim_min_blue  = 16, lim_max_blue  = 25;
+static int lim_min_green = 26, lim_max_green = 40;
+
+// Intensidad fija por color (ambos LEDs)
+static int int_red   = 100;
+static int int_blue  = 100;
+static int int_green = 100;
+
+// Última temperatura leída (para el comando READ)
+static float last_temp     = 0.0f;
+static int   last_volt_mv  = 0;
+static float last_r_therm  = 0.0f;
+static int   last_pot_pct  = 0;
  
 // ── GPIOs LED 1 (termistor) ───────────────────────────────────────────────────
-#define LED1_RED_GPIO    7
-#define LED1_GREEN_GPIO  18
-#define LED1_BLUE_GPIO   19
+#define LED1_RED_GPIO    13
+#define LED1_GREEN_GPIO  12
+#define LED1_BLUE_GPIO   11
  
 // ── GPIOs LED 2 (estados) ─────────────────────────────────────────────────────
-#define LED2_RED_GPIO    8
-#define LED2_GREEN_GPIO  9
-#define LED2_BLUE_GPIO   10
+#define LED2_RED_GPIO    10
+#define LED2_GREEN_GPIO  8 
+#define LED2_BLUE_GPIO   7
  
 // ── ADC ───────────────────────────────────────────────────────────────────────
 #define ADC_THERMISTOR   ADC_CHANNEL_4   // GPIO 4  → termistor
@@ -44,15 +85,15 @@ static const char *TAG = "LED_RGB";
 #define ADC_ATTEN        ADC_ATTEN_DB_12 // rango 0-3.3V
  
 // ── Botón ─────────────────────────────────────────────────────────────────────
-#define BUTTON_GPIO      2               // mismo botón que antes
+#define BUTTON_GPIO      6               // mismo botón que antes
  
 // ── Termistor NTCLE100E3101JB0A ───────────────────────────────────────────────
-// R0 = 1000 Ω a T0 = 25°C, B = 3800 K
+// R0 = 10000 Ω a T0 = 25°C, B = 4500 K
 // Divisor de voltaje: 3.3V → R_fija(1000Ω) → pin ADC → termistor → GND
-#define THERMISTOR_R0    10000.0f
-#define THERMISTOR_B     4100.0f
+#define THERMISTOR_R0    6957.0f
+#define THERMISTOR_B     4500.0f
 #define THERMISTOR_T0    298.15f   // 25°C en Kelvin
-#define THERMISTOR_RFIJA 1000.0f   // resistencia fija del divisor (1000 Ω)
+#define THERMISTOR_RFIJA 13000.0f   // resistencia fija del divisor (1000 Ω)
 #define ADC_MAX          4095.0f   // resolución 12 bits
  
 // ── Estados del LED 2 ─────────────────────────────────────────────────────────
@@ -66,16 +107,22 @@ typedef enum {
 // ─────────────────────────────────────────────────────────────────────────────
 // Convierte lectura ADC del termistor a temperatura en °C
 // Fórmula Beta: 1/T = 1/T0 + (1/B)*ln(R/R0)
+// out_voltage_mv: voltaje medido en mV (parámetro de salida)  <-- NUEVO
 // ─────────────────────────────────────────────────────────────────────────────
-static float adc_to_temperature(int raw)
+static float adc_to_temperature(int raw, int *out_voltage_mv)  // <-- NUEVO: agrega out_voltage_mv
 {
     // Voltaje leído
     float v_adc = (raw / ADC_MAX) * 3.3f;
- 
+
+    // NUEVO: guarda el voltaje en mV en el puntero recibido
+    if (out_voltage_mv != NULL) {
+        *out_voltage_mv = (int)(v_adc * 1000.0f);
+    }
+
     // Resistencia del termistor en el divisor: Rt = Rfija * Vadc / (3.3 - Vadc)
     if (v_adc >= 3.3f) v_adc = 3.29f; // evitar división por cero
-    //float r_thermistor = THERMISTOR_RFIJA * v_adc / (3.3f - v_adc);
-    float r_thermistor = THERMISTOR_RFIJA * (3.3f - v_adc) / v_adc;
+    float r_thermistor = THERMISTOR_RFIJA * v_adc / (3.3f - v_adc);
+   // float r_thermistor = THERMISTOR_RFIJA * (3.3f - v_adc) / v_adc;
     // Ecuación Beta
     float inv_T = (1.0f / THERMISTOR_T0) + (1.0f / THERMISTOR_B) * logf(r_thermistor / THERMISTOR_R0);
     float temp_k = 1.0f / inv_T;
@@ -117,13 +164,86 @@ static void adc_init(void)
     adc_cali_create_scheme_curve_fitting(&cali_cfg, &adc1_cali_pot);
 #endif
 }
- 
+// ── UART ─────────────────────────────────────────────────────────────────────
+#define UART_PORT       UART_NUM_0
+#define UART_BUF_SIZE   256
+
+static void uart_init(void)
+{
+    uart_config_t cfg = {
+        .baud_rate  = 115200,
+        .data_bits  = UART_DATA_8_BITS,
+        .parity     = UART_PARITY_DISABLE,
+        .stop_bits  = UART_STOP_BITS_1,
+        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    ESP_ERROR_CHECK(uart_driver_install(UART_PORT, UART_BUF_SIZE * 2, 0, 0, NULL, 0));
+    ESP_ERROR_CHECK(uart_param_config(UART_PORT, &cfg));
+    // GPIO 0 y 1 son TX/RX del UART0 por defecto en ESP32-C6
+    ESP_ERROR_CHECK(uart_set_pin(UART_PORT, 16, 17, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+}
+
+static void uart_task(void *arg)
+{
+    uint8_t buf[UART_BUF_SIZE];
+    int     val;
+
+    while (1) {
+        int len = uart_read_bytes(UART_PORT, buf, UART_BUF_SIZE - 1, 100 / portTICK_PERIOD_MS);
+        if (len <= 0) continue;
+
+        buf[len] = '\0';
+        // Elimina \r y \n del final
+        for (int i = len - 1; i >= 0 && (buf[i] == '\r' || buf[i] == '\n'); i--) buf[i] = '\0';
+
+        ESP_LOGI(TAG, "CMD recibido: %s", (char*)buf);
+
+        // ── Grupo 1: límites de temperatura ──────────────────────────────────
+        if      (sscanf((char*)buf, "LIM_MI_R_%d", &val) == 1) { lim_min_red   = val; uart_write_bytes(UART_PORT, "OK: LIM_MI_R\r\n", 14); }
+        else if (sscanf((char*)buf, "LIM_MA_R_%d", &val) == 1) { lim_max_red   = val; uart_write_bytes(UART_PORT, "OK: LIM_MA_R\r\n", 14); }
+        else if (sscanf((char*)buf, "LIM_MI_B_%d", &val) == 1) { lim_min_blue  = val; uart_write_bytes(UART_PORT, "OK: LIM_MI_B\r\n", 14); }
+        else if (sscanf((char*)buf, "LIM_MA_B_%d", &val) == 1) { lim_max_blue  = val; uart_write_bytes(UART_PORT, "OK: LIM_MA_B\r\n", 14); }
+        else if (sscanf((char*)buf, "LIM_MI_G_%d", &val) == 1) { lim_min_green = val; uart_write_bytes(UART_PORT, "OK: LIM_MI_G\r\n", 14); }
+        else if (sscanf((char*)buf, "LIM_MA_G_%d", &val) == 1) { lim_max_green = val; uart_write_bytes(UART_PORT, "OK: LIM_MA_G\r\n", 14); }
+
+        // ── Grupo 2: intensidad por color ─────────────────────────────────────
+        else if (sscanf((char*)buf, "INT_R_%d", &val) == 1) { int_red   = val; uart_write_bytes(UART_PORT, "OK: INT_R\r\n", 11); }
+        else if (sscanf((char*)buf, "INT_B_%d", &val) == 1) { int_blue  = val; uart_write_bytes(UART_PORT, "OK: INT_B\r\n", 11); }
+        else if (sscanf((char*)buf, "INT_G_%d", &val) == 1) { int_green = val; uart_write_bytes(UART_PORT, "OK: INT_G\r\n", 11); }
+
+        // ── Grupo 3: READ ─────────────────────────────────────────────────────
+        else if (strcmp((char*)buf, "READ") == 0) {
+            char resp[300];
+            snprintf(resp, sizeof(resp),
+                "\r\n===== ESTADO ACTUAL =====\r\n"
+                "Temp      : %.1f C\r\n"
+                "Voltaje   : %d mV\r\n"
+                "Resist.   : %.1f Ohm\r\n"
+                "Pot       : %d%%\r\n"
+                "LIM Rojo  : %d - %d C  | INT: %d%%\r\n"
+                "LIM Verde : %d - %d C  | INT: %d%%\r\n"
+                "LIM Azul  : %d - %d C  | INT: %d%%\r\n"
+                "=========================\r\n",
+                last_temp, last_volt_mv, last_r_therm, last_pot_pct,
+                lim_min_red,   lim_max_red,   int_red,
+                lim_min_green, lim_max_green, int_green,
+                lim_min_blue,  lim_max_blue,  int_blue
+            );
+            uart_write_bytes(UART_PORT, resp, strlen(resp));
+        }
+        else {
+            uart_write_bytes(UART_PORT, "ERROR: comando desconocido\r\n", 28);
+        }
+    }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // Inicializa el botón con pull-up interno
 // ─────────────────────────────────────────────────────────────────────────────
 // ── Configura los tres GPIOs de botón como entradas con pull-up interno ───────
 // Al presionar el botón el pin lee 0 (activo en bajo).
 static void buttons_init(void)
+
 {
     gpio_config_t cfg = {
        .pin_bit_mask = (1ULL << BUTTON_GPIO),
@@ -182,7 +302,10 @@ void app_main(void)
     // ── 3. Inicializar ADC y botón ────────────────────────────────────────────
     adc_init();
     buttons_init();
- 
+    uart_init();                                                          // <-- NUEVO
+    xTaskCreate(uart_task, "uart_task", 4096, NULL, 5, NULL);            // <-- NUEVO
+
+
     // ── 4. Variables de estado para LED 2 ────────────────────────────────────
     led2_state_t estado      = STATE_RED;  // empieza ajustando rojo
     int saved_red            = 0;
@@ -203,22 +326,44 @@ void app_main(void)
         // ── Leer termistor y actualizar LED 1 ────────────────────────────────
         int raw_therm = 0;
         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_THERMISTOR, &raw_therm));
-        float temp = adc_to_temperature(raw_therm);
+        int voltage_mv = 0;                                           // <-- NUEVO
+        float temp = adc_to_temperature(raw_therm, &voltage_mv);     // <-- NUEVO: pasa &voltage_mv
  
+
+
+      // calcula la resistencia del termistor desde el voltaje medido
+        // Fórmula del divisor despejada: Rt = Rfija * Vadc / (3.3 - Vadc)
+        float v_adc = voltage_mv / 1000.0f;
+        float r_therm = THERMISTOR_RFIJA * v_adc / (3.3f - v_adc);
+    /*
         if (temp < 25.0f) {
             led_rgb_set_color(&led1, 0, 0, 100);   // azul
         } else if (temp <= 35.0f) {
             led_rgb_set_color(&led1, 0, 100, 0);   // verde
         } else {
             led_rgb_set_color(&led1, 100, 0, 0);   // rojo
-        }
-        ESP_LOGI(TAG, "Temp: %.1f°C", temp);
- 
+            }*/
+       
+            // Cada color se evalúa independientemente según sus límites configurables
+        int r = (temp >= lim_min_red   && temp <= lim_max_red)   ? int_red   : 0;
+        int g = (temp >= lim_min_green && temp <= lim_max_green) ? int_green : 0;
+        int b = (temp >= lim_min_blue  && temp <= lim_max_blue)  ? int_blue  : 0;
+        led_rgb_set_color(&led1, r, g, b);
+        ESP_LOGI(TAG, "Temp: %.1f C | Voltaje: %d mV | Resistencia: %.1f Ohm", temp, voltage_mv, r_therm);  // <-- NUEVO: agrega voltaje
+        
+        // Guarda los valores para que el comando READ pueda reportarlos
+        last_temp    = temp;
+        last_volt_mv = voltage_mv;
+        last_r_therm = r_therm;
+       
+       
         // ── Leer potenciómetro (0-4095 → 0-100%) ─────────────────────────────
         int raw_pot = 0;
         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_POT, &raw_pot));
         int pot_pct = (int)((raw_pot / ADC_MAX) * 100.0f);  // 0 a 100
- 
+        last_pot_pct = pot_pct;   // guarda para READ
+        
+        
         // ── Actualizar LED 2 según estado actual ──────────────────────────────
         switch (estado) {
             case STATE_RED:
@@ -274,7 +419,6 @@ void app_main(void)
         }
         prev_button = cur_button;
  
-        vTaskDelay(20 / portTICK_PERIOD_MS);  // 20 ms — lectura ADC + anti-rebote
+        vTaskDelay(1000 / portTICK_PERIOD_MS);  // 20 ms — lectura ADC + anti-rebote
     }
 }
-
